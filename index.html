@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitHub作業カンバン</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>GitHub作業カンバン</h1>
+          <p>イシューとPRをレーンで分け、関連作業を色でつなげます。</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="button primary" id="newCardButton" type="button">新規カード</button>
+          <button class="button" id="archiveViewButton" type="button">アーカイブ</button>
+          <button class="button" id="exportButton" type="button">JSON書き出し</button>
+          <label class="button file-button">
+            JSON読み込み
+            <input id="importInput" type="file" accept="application/json" />
+          </label>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="board-section" aria-label="カンバンボード">
+          <div class="filterbar">
+            <label class="search-field">
+              <span>検索</span>
+              <input id="searchInput" type="search" placeholder="リポジトリ / #番号 / タイトル / ラベル" />
+            </label>
+            <div class="segmented" aria-label="カード種類フィルター">
+              <button class="segment active" data-type-filter="all" type="button">すべて</button>
+              <button class="segment" data-type-filter="issue" type="button">イシュー</button>
+              <button class="segment" data-type-filter="pr" type="button">PR</button>
+            </div>
+            <label class="select-field">
+              <span>ラベル</span>
+              <select id="labelFilter">
+                <option value="all">すべてのラベル</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="board-wrap">
+            <div class="board-grid" id="boardGrid"></div>
+          </div>
+        </section>
+
+        <aside class="side-panel" aria-label="カード編集">
+          <div class="panel-empty" id="panelEmpty">
+            <div class="panel-empty-icon">+</div>
+            <h2>カード未選択</h2>
+            <p>カードを選ぶか、新規カードを作成してください。</p>
+          </div>
+
+          <form class="card-form hidden" id="cardForm">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow" id="formModeLabel">新規カード</p>
+                <h2 id="formTitle">作業カードを作成</h2>
+              </div>
+              <button class="icon-button" id="closePanelButton" type="button" aria-label="パネルを閉じる">×</button>
+            </div>
+
+            <div class="field-grid two">
+              <label>
+                <span>種類</span>
+                <select id="cardType">
+                  <option value="issue">イシュー</option>
+                  <option value="pr">PR</option>
+                </select>
+              </label>
+              <label>
+                <span>状態</span>
+                <select id="cardStatus"></select>
+              </label>
+            </div>
+
+            <div class="field-grid two">
+              <label>
+                <span>番号</span>
+                <input id="cardNumber" type="number" min="1" placeholder="123" />
+              </label>
+              <label>
+                <span>リポジトリ</span>
+                <input id="cardRepo" type="text" placeholder="org/repo" />
+              </label>
+            </div>
+
+            <label>
+              <span>タイトル</span>
+              <input id="cardTitleInput" type="text" placeholder="短い作業タイトル" required />
+            </label>
+
+            <label>
+              <span>GitHubのURL</span>
+              <input id="cardUrl" type="url" placeholder="https://github.com/org/repo/issues/123" />
+            </label>
+
+            <div class="field-grid two">
+              <label>
+                <span>ラベル</span>
+                <input id="cardLabel" list="labelSuggestions" type="text" placeholder="ブロック中" />
+                <datalist id="labelSuggestions"></datalist>
+              </label>
+              <label>
+                <span>ラベル色</span>
+                <input id="cardLabelColor" type="color" value="#d73a49" />
+              </label>
+            </div>
+
+            <label id="linkedIssueField" class="hidden">
+              <span>主イシュー</span>
+              <select id="linkedIssueSelect">
+                <option value="">関連イシューなし</option>
+              </select>
+            </label>
+
+            <label>
+              <span>メモ</span>
+              <textarea id="cardMemo" rows="3" placeholder="状況や次の一手を短く書く"></textarea>
+            </label>
+
+            <div class="form-actions">
+              <button class="button primary" type="submit">保存</button>
+              <button class="button" id="archiveCardButton" type="button">アーカイブ</button>
+              <button class="button danger" id="deleteCardButton" type="button">削除</button>
+            </div>
+          </form>
+
+          <section class="archive-panel hidden" id="archivePanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">アーカイブ</p>
+                <h2>アーカイブ済みカード</h2>
+              </div>
+              <button class="icon-button" id="closeArchiveButton" type="button" aria-label="アーカイブを閉じる">×</button>
+            </div>
+            <div class="archive-list" id="archiveList"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <template id="cardTemplate">
+      <article class="card" draggable="true">
+        <div class="card-main">
+          <div class="card-topline">
+            <span class="card-number"></span>
+            <span class="type-badge"></span>
+          </div>
+          <h3 class="card-title"></h3>
+          <div class="card-repo"></div>
+          <div class="label-row"></div>
+          <div class="linked-row"></div>
+          <p class="card-memo"></p>
+        </div>
+        <label class="move-menu">
+          <span>移動</span>
+          <select></select>
+        </label>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
