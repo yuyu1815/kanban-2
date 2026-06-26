@@ -33,6 +33,7 @@ const LABEL_COLORS = [
 
 const state = loadState();
 let selectedCardId = null;
+let draggingCardId = null;
 let formMode = "idle";
 let filters = {
   query: "",
@@ -60,10 +61,9 @@ const elements = {
   formTitle: document.querySelector("#formTitle"),
   cardType: document.querySelector("#cardType"),
   cardStatus: document.querySelector("#cardStatus"),
-  cardNumber: document.querySelector("#cardNumber"),
-  cardRepo: document.querySelector("#cardRepo"),
   cardTitleInput: document.querySelector("#cardTitleInput"),
   cardUrl: document.querySelector("#cardUrl"),
+  urlDerivedMeta: document.querySelector("#urlDerivedMeta"),
   cardLabel: document.querySelector("#cardLabel"),
   cardLabelColor: document.querySelector("#cardLabelColor"),
   labelSuggestions: document.querySelector("#labelSuggestions"),
@@ -77,7 +77,7 @@ const elements = {
 initialize();
 
 function initialize() {
-  buildStatusOptions();
+  buildStatusOptions("issue");
   bindEvents();
   render();
   showEmptyPanel();
@@ -91,12 +91,14 @@ function loadState() {
     if (!stored) return fallback;
 
     const parsed = JSON.parse(stored);
-    return {
+    const loaded = {
       cards: Array.isArray(parsed.cards) ? parsed.cards : [],
       labelColors: parsed.labelColors && typeof parsed.labelColors === "object" ? parsed.labelColors : {},
       linkColors: parsed.linkColors && typeof parsed.linkColors === "object" ? parsed.linkColors : {},
       nextColorIndex: Number.isInteger(parsed.nextColorIndex) ? parsed.nextColorIndex : 0,
     };
+    normalizeCards(loaded.cards);
+    return loaded;
   } catch {
     return fallback;
   }
@@ -132,19 +134,26 @@ function bindEvents() {
     });
   });
   elements.cardType.addEventListener("change", () => {
+    buildStatusOptions(elements.cardType.value, elements.cardStatus.value);
     syncLinkedIssueVisibility();
-    suggestStatusForType();
   });
+  elements.cardUrl.addEventListener("input", syncUrlDerivedFields);
   elements.cardLabel.addEventListener("input", syncLabelColorFromKnownLabel);
   elements.linkedIssueSelect.addEventListener("change", syncPrLinkColorPreview);
 }
 
-function buildStatusOptions() {
+function buildStatusOptions(type = "issue", selectedStatus = "") {
+  const allowedStatuses = getStatusesForType(type);
+  const nextStatus = allowedStatuses.some((status) => status.id === selectedStatus)
+    ? selectedStatus
+    : getDefaultStatusForType(type);
+
   elements.cardStatus.innerHTML = "";
-  STATUSES.forEach((status) => {
+  allowedStatuses.forEach((status) => {
     const option = document.createElement("option");
     option.value = status.id;
     option.textContent = status.label;
+    option.selected = status.id === nextStatus;
     elements.cardStatus.append(option);
   });
 }
@@ -161,49 +170,56 @@ function render() {
 function renderBoard() {
   elements.boardGrid.innerHTML = "";
 
-  const corner = document.createElement("div");
-  corner.className = "grid-corner";
-  corner.textContent = "種類 / 状態";
-  elements.boardGrid.append(corner);
+  ["issue", "pr"]
+    .filter((type) => filters.type === "all" || filters.type === type)
+    .forEach((type) => elements.boardGrid.append(renderBoardTable(type)));
+}
 
-  STATUSES.forEach((status) => {
+function renderBoardTable(type) {
+  const statuses = getStatusesForType(type);
+  const table = document.createElement("section");
+  table.className = `board-table ${type}`;
+
+  const heading = document.createElement("div");
+  heading.className = "board-table-title";
+  heading.innerHTML = `<strong>${type === "issue" ? "イシュー" : "PR"}</strong><span>${laneCount(type)}件</span>`;
+
+  const grid = document.createElement("div");
+  grid.className = "status-grid";
+  grid.style.setProperty("--status-count", String(statuses.length));
+
+  statuses.forEach((status) => {
     const header = document.createElement("div");
     header.className = "column-header";
-    header.innerHTML = `<strong>${status.label}</strong><span>${statusHint(status)}</span>`;
-    elements.boardGrid.append(header);
+    header.innerHTML = `<strong>${status.label}</strong>`;
+    grid.append(header);
   });
 
-  ["issue", "pr"].forEach((type) => {
-    const lane = document.createElement("div");
-    lane.className = `lane-header ${type}`;
-    lane.innerHTML = `<strong>${type === "issue" ? "イシュー" : "PR"}</strong><span>${laneCount(type)}件</span>`;
-    elements.boardGrid.append(lane);
+  statuses.forEach((status) => {
+    const cell = document.createElement("div");
+    cell.className = "board-cell";
+    cell.dataset.type = type;
+    cell.dataset.status = status.id;
+    cell.addEventListener("dragover", handleDragOver);
+    cell.addEventListener("dragleave", handleDragLeave);
+    cell.addEventListener("drop", handleDrop);
 
-    STATUSES.forEach((status) => {
-      const cell = document.createElement("div");
-      cell.className = `board-cell ${status[type] === "exception" ? "exception-zone" : ""}`;
-      cell.dataset.type = type;
-      cell.dataset.status = status.id;
-      cell.addEventListener("dragover", handleDragOver);
-      cell.addEventListener("dragleave", handleDragLeave);
-      cell.addEventListener("drop", handleDrop);
+    const cards = filteredCards().filter((card) => card.type === type && card.status === status.id && !card.archived);
 
-      const cards = filteredCards().filter(
-        (card) => card.type === type && card.status === status.id && !card.archived,
-      );
+    if (cards.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-cell";
+      empty.textContent = "空";
+      cell.append(empty);
+    } else {
+      cards.forEach((card) => cell.append(renderCard(card)));
+    }
 
-      if (cards.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "empty-cell";
-        empty.textContent = status[type] === "exception" ? "例外枠" : "空";
-        cell.append(empty);
-      } else {
-        cards.forEach((card) => cell.append(renderCard(card)));
-      }
-
-      elements.boardGrid.append(cell);
-    });
+    grid.append(cell);
   });
+
+  table.append(heading, grid);
+  return table;
 }
 
 function renderCard(card) {
@@ -224,11 +240,13 @@ function renderCard(card) {
     openEditForm(card.id);
   });
   cardElement.addEventListener("dragstart", (event) => {
+    draggingCardId = card.id;
     event.dataTransfer.setData("text/plain", card.id);
     event.dataTransfer.effectAllowed = "move";
     cardElement.classList.add("dragging");
   });
   cardElement.addEventListener("dragend", () => {
+    draggingCardId = null;
     cardElement.classList.remove("dragging");
   });
 
@@ -267,7 +285,7 @@ function renderCard(card) {
   memo.hidden = !card.memo;
 
   moveSelect.innerHTML = "";
-  STATUSES.forEach((status) => {
+  getStatusesForType(card.type).forEach((status) => {
     const option = document.createElement("option");
     option.value = status.id;
     option.textContent = status.label;
@@ -390,8 +408,9 @@ function openNewForm() {
   elements.formTitle.textContent = "作業カードを作成";
   elements.cardForm.reset();
   elements.cardType.value = "issue";
-  elements.cardStatus.value = "backlog";
+  buildStatusOptions("issue", "backlog");
   elements.cardLabelColor.value = LABEL_COLORS[0];
+  syncUrlDerivedFields();
   elements.archiveCardButton.hidden = true;
   elements.deleteCardButton.hidden = true;
   syncLinkedIssueVisibility();
@@ -408,15 +427,14 @@ function openEditForm(cardId) {
   elements.formModeLabel.textContent = "カード編集";
   elements.formTitle.textContent = formatCardNumber(card);
   elements.cardType.value = card.type;
-  elements.cardStatus.value = card.status;
-  elements.cardNumber.value = card.number || "";
-  elements.cardRepo.value = card.repo || "";
+  buildStatusOptions(card.type, card.status);
   elements.cardTitleInput.value = card.title || "";
   elements.cardUrl.value = card.url || "";
   elements.cardLabel.value = getLabels(card).join(", ");
   elements.cardLabelColor.value = state.labelColors[getLabels(card)[0]] || LABEL_COLORS[0];
   elements.linkedIssueSelect.value = card.linkedIssueId || "";
   elements.cardMemo.value = card.memo || "";
+  syncUrlDerivedFields();
   elements.archiveCardButton.hidden = false;
   elements.deleteCardButton.hidden = false;
   syncLinkedIssueVisibility();
@@ -453,6 +471,8 @@ function handleFormSubmit(event) {
   event.preventDefault();
 
   const payload = readFormPayload();
+  if (!payload) return;
+
   if (!payload.title) {
     elements.cardTitleInput.focus();
     return;
@@ -480,17 +500,26 @@ function handleFormSubmit(event) {
 }
 
 function readFormPayload() {
-  const type = elements.cardType.value;
+  const url = elements.cardUrl.value.trim();
+  const parsedUrl = parseGitHubUrl(url);
+  if (!parsedUrl) {
+    elements.cardUrl.setCustomValidity("GitHubのIssueまたはPRのURLを入力してください。");
+    elements.cardUrl.reportValidity();
+    return null;
+  }
+
+  elements.cardUrl.setCustomValidity("");
+  const type = parsedUrl.type;
   const labels = splitLabels(elements.cardLabel.value);
   const linkedIssueId = type === "pr" ? elements.linkedIssueSelect.value : "";
 
   return {
     type,
-    status: elements.cardStatus.value,
-    number: elements.cardNumber.value ? Number(elements.cardNumber.value) : "",
-    repo: elements.cardRepo.value.trim(),
+    status: isStatusAllowed(type, elements.cardStatus.value) ? elements.cardStatus.value : getDefaultStatusForType(type),
+    number: parsedUrl.number,
+    repo: parsedUrl.repo,
     title: elements.cardTitleInput.value.trim(),
-    url: elements.cardUrl.value.trim(),
+    url,
     labels,
     labelColor: elements.cardLabelColor.value,
     linkedIssueId,
@@ -530,12 +559,15 @@ function removeCard(cardId) {
 function moveCard(cardId, statusId) {
   const card = findCard(cardId);
   if (!card) return;
+  if (!isStatusAllowed(card.type, statusId)) return;
   card.status = statusId;
   card.updatedAt = new Date().toISOString();
   render();
 }
 
 function handleDragOver(event) {
+  if (!canPlaceCard(draggingCardId, event.currentTarget.dataset.type, event.currentTarget.dataset.status)) return;
+
   event.preventDefault();
   event.currentTarget.classList.add("drag-over");
 }
@@ -551,7 +583,7 @@ function handleDrop(event) {
   const card = findCard(cardId);
   if (!card) return;
 
-  if (card.type !== event.currentTarget.dataset.type) return;
+  if (!canPlaceCard(card.id, event.currentTarget.dataset.type, event.currentTarget.dataset.status)) return;
 
   card.status = event.currentTarget.dataset.status;
   card.updatedAt = new Date().toISOString();
@@ -582,6 +614,7 @@ function importJson(event) {
       state.labelColors = imported.labelColors && typeof imported.labelColors === "object" ? imported.labelColors : {};
       state.linkColors = imported.linkColors && typeof imported.linkColors === "object" ? imported.linkColors : {};
       state.nextColorIndex = Number.isInteger(imported.nextColorIndex) ? imported.nextColorIndex : 0;
+      normalizeCards(state.cards);
       selectedCardId = null;
       ensureLinkColors();
       showEmptyPanel();
@@ -600,9 +633,22 @@ function syncLinkedIssueVisibility() {
   elements.linkedIssueField.classList.toggle("hidden", !isPr);
 }
 
-function suggestStatusForType() {
-  if (formMode !== "new") return;
-  elements.cardStatus.value = elements.cardType.value === "pr" ? "pr-open" : "backlog";
+function syncUrlDerivedFields() {
+  elements.cardUrl.setCustomValidity("");
+  const parsedUrl = parseGitHubUrl(elements.cardUrl.value.trim());
+
+  if (!parsedUrl) {
+    elements.urlDerivedMeta.textContent = "URLからリポジトリと番号を取得します。";
+    return;
+  }
+
+  elements.urlDerivedMeta.textContent = `自動取得: ${parsedUrl.type === "issue" ? "イシュー" : "PR"} / ${parsedUrl.repo} / #${parsedUrl.number}`;
+
+  if (elements.cardType.value !== parsedUrl.type) {
+    elements.cardType.value = parsedUrl.type;
+    buildStatusOptions(parsedUrl.type, elements.cardStatus.value);
+    syncLinkedIssueVisibility();
+  }
 }
 
 function syncLabelColorFromKnownLabel() {
@@ -657,6 +703,69 @@ function getLinkedCards(card) {
   return issue && !issue.archived ? [issue] : [];
 }
 
+function normalizeCards(cards) {
+  cards.forEach((card) => {
+    const parsedUrl = parseGitHubUrl(card.url || "");
+    if (parsedUrl) {
+      card.type = parsedUrl.type;
+      card.repo = parsedUrl.repo;
+      card.number = parsedUrl.number;
+    } else {
+      card.type = card.type === "pr" ? "pr" : "issue";
+    }
+
+    if (!isStatusAllowed(card.type, card.status)) {
+      card.status = getDefaultStatusForType(card.type);
+    }
+
+    if (card.type === "issue") {
+      card.linkedIssueId = "";
+    }
+  });
+}
+
+function parseGitHubUrl(value) {
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "github.com") return null;
+
+    const [owner, repo, kind, number] = url.pathname.split("/").filter(Boolean);
+    if (!owner || !repo || !kind || !number) return null;
+    if (!/^\d+$/.test(number)) return null;
+
+    if (kind === "issues") {
+      return { type: "issue", repo: `${owner}/${repo}`, number: Number(number) };
+    }
+
+    if (kind === "pull" || kind === "pulls") {
+      return { type: "pr", repo: `${owner}/${repo}`, number: Number(number) };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function canPlaceCard(cardId, type, statusId) {
+  const card = findCard(cardId);
+  return Boolean(card && card.type === type && isStatusAllowed(type, statusId));
+}
+
+function getStatusesForType(type) {
+  return STATUSES.filter((status) => status[type] === "normal");
+}
+
+function getDefaultStatusForType(type) {
+  return type === "pr" ? "pr-open" : "backlog";
+}
+
+function isStatusAllowed(type, statusId) {
+  return getStatusesForType(type).some((status) => status.id === statusId);
+}
+
 function getKnownLabels() {
   const labels = new Set();
   state.cards.forEach((card) => getLabels(card).forEach((label) => labels.add(label)));
@@ -687,10 +796,4 @@ function formatCardNumber(card) {
 
 function laneCount(type) {
   return state.cards.filter((card) => card.type === type && !card.archived).length;
-}
-
-function statusHint(status) {
-  const issueHint = status.issue === "normal" ? "イシュー" : "イシュー例外";
-  const prHint = status.pr === "normal" ? "PR" : "PR例外";
-  return `${issueHint} / ${prHint}`;
 }

@@ -67,7 +67,7 @@
 
             <div class="field-grid two">
               <label>
-                <span>種類</span>
+                <span>種類（URLから自動反映）</span>
                 <select id="cardType">
                   <option value="issue">イシュー</option>
                   <option value="pr">PR</option>
@@ -79,17 +79,6 @@
               </label>
             </div>
 
-            <div class="field-grid two">
-              <label>
-                <span>番号</span>
-                <input id="cardNumber" type="number" min="1" placeholder="123" />
-              </label>
-              <label>
-                <span>リポジトリ</span>
-                <input id="cardRepo" type="text" placeholder="org/repo" />
-              </label>
-            </div>
-
             <label>
               <span>タイトル</span>
               <input id="cardTitleInput" type="text" placeholder="短い作業タイトル" required />
@@ -97,7 +86,8 @@
 
             <label>
               <span>GitHubのURL</span>
-              <input id="cardUrl" type="url" placeholder="https://github.com/org/repo/issues/123" />
+              <input id="cardUrl" type="url" placeholder="https://github.com/org/repo/issues/123" required />
+              <small class="derived-meta" id="urlDerivedMeta">URLからリポジトリと番号を取得します。</small>
             </label>
 
             <div class="field-grid two">
